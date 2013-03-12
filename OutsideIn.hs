@@ -476,12 +476,8 @@ topReactGiven (TLI _ _ (I cls1 tys1)) (Instance (I cls2 tys2))
   = error "FIXME: fail"
 topReactGiven (TLE tvs tf1a tys1a ty1b) (Equality (TyFamApp tf2a tys2b :~ ty2b))
   -- FINST[g]
-  -- TODO: share code with FINST[w]
   | tf1a == tf2a
-  , Just theta <- zipWithM antiSubst tys1a tys2b >>= joinSubsts
-  , let tvs_c = tvs \\ S.toList (S.unions (map fvs tys1a))
-        tvs_gamma = error "FIXME: fresh" tvs_c
-        theta' = theta `M.union` M.fromList (tvs_c `zip` map TyVar tvs_gamma)
+  , Just (_tvs_gamma, theta) <- instTop tvs tys1a tys2b
   = Just $ Just [Equality (subst theta ty1b :~ ty2b)]
 topReactGiven _ _ = Nothing
 
@@ -495,21 +491,23 @@ topReactWanted tli c | trace ("topReactWanted " ++ prettyShow (tli ,c)) False = 
 topReactWanted (TLI tvs required (I cls1 tys1)) (Instance (I cls2 tys2))
   -- DINSTW
   | cls1 == cls2
-  , Just theta <- zipWithM antiSubst tys1 tys2 >>= joinSubsts
-  , let tvs_c = tvs \\ S.toList (S.unions (map fvs tys1))
-        tvs_gamma = error "FIXME: fresh" tvs_c
-        theta' = theta `M.union` M.fromList (tvs_c `zip` map TyVar tvs_gamma)
-  = Just $ Just (tvs_gamma, map (substConstraint theta') required)
+  , Just (tvs_gamma, theta) <- instTop tvs tys1 tys2
+  = Just $ Just (tvs_gamma, map (substConstraint theta) required)
 topReactWanted (TLE tvs tf1a tys1a ty1b) (Equality (TyFamApp tf2a tys2b :~ ty2b))
   -- FINST[w]
-  -- TODO: share code with FINST[g]
   | tf1a == tf2a
-  , Just theta <- zipWithM antiSubst tys1a tys2b >>= joinSubsts
-  , let tvs_c = tvs \\ S.toList (S.unions (map fvs tys1a))
-        tvs_gamma = error "FIXME: fresh" tvs_c
-        theta' = theta `M.union` M.fromList (tvs_c `zip` map TyVar tvs_gamma)
+  , Just (tvs_gamma, theta) <- instTop tvs tys1a tys2b
   = Just $ Just (tvs_gamma, [Equality (subst theta ty1b :~ ty2b)])
 topReactWanted _ _ = Nothing
+
+
+instTop :: TyVarLike tv => [tv] -> [Type tv] -> [Type tv] -> Maybe ([tv], TySubst tv)
+instTop tvs tys1a tys2b = do
+  theta <- zipWithM antiSubst tys1a tys2b >>= joinSubsts
+  let tvs_c = tvs \\ S.toList (S.unions (map fvs tys1a))
+      tvs_gamma = error "FIXME: fresh" tvs_c
+      theta' = theta `M.union` M.fromList (tvs_c `zip` map TyVar tvs_gamma)
+  return (tvs_gamma, theta')
 
 
 a = TcSkolem "a"; aTy = TyVar a

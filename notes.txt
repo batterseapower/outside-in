@@ -1,0 +1,160 @@
+(forall x. P(x)) /\ (forall x. Q(x)) <=> forall x. P(x) /\ Q(x)
+(exists x. P(x)) /\ Q     		     <=> exists x. P(x) /\ Q
+(exists x. P(x)) \/ (exists x. Q(x)) <=> exists x. P(x) \/ Q(x)
+(forall x. P(x)) \/ Q 			     <=> forall x. P(x) \/ Q
+exists y. forall x. Q(x, y) ==> forall x. exists y. Q(x, y)
+!(forall x. P(x)) <=> exists x. !P(x)
+!(exists x. P(x)) <=> forall x. !P(x)
+P -> Q <=> Q \/ !P
+
+forall x. P(x) -> Q
+ <=> forall x. !P(x) \/ Q
+ <=> (forall x. !P(x)) \/ Q
+ <=> !(exists x. P(x)) \/ Q
+ <=> (exists x. P(x)) -> Q
+
+exists x. P(x) -> Q
+ <=> exists x. !P(x) \/ Q
+ <=> (exists x. !P(x)) \/ Q
+ <=> !(forall x. P(x)) \/ Q
+ <=> (forall x. P(x)) -> Q
+
+P -> exists x. Q(x)
+ <=> !P /\ exists x. Q(x)
+ <=> exists x. !P /\ Q(x)
+ <=> exists x. P -> Q(x)
+
+P -> forall x. Q(x)
+ <=> !P /\ forall x. Q(x)
+ <=> forall x. !P /\ Q(x)
+ <=> forall x. P -> Q(x)
+
+Given: (forall a. Q => C (F a))
+Canonicalised: (forall a. exists xi. Q => C xi /\ xi ~ F a)
+			   exists xi. (forall a. Q => C (xi a)) /\ (forall a. xi a ~ F a)
+
+
+IMPORTANT:
+
+     		   T (F a) 		   ->  			 S (F a)
+==> (exists d. T d /\ d ~ F a) -> exists c. (S c /\ c ~ F a)
+==> forall d. (T d /\ d ~ F a) -> exists c. (S c /\ c ~ F a)
+==> forall d. exists c. (T d /\ d ~ F a) -> (S c /\ c ~ F a)
+
+From this we learn:
+ * The variables not mentioned by a SPJ constraint are implicitly forall quantified
+ * This is why given canonicalization in the *given* does not extend the touchables: the variables it adds must be forall quantified instead
+ * This is why DINSTW has to touchableise the forall-bound tyvars in the top-level constraint: they change from being foralls to exists
+   when they get copied into the new part of the wanted
+
+
+AVOIDING CHOICE:
+ * We cannot ever choose between two pieces of evidence for the same dictionary,
+   because the evidence may differ.
+ * In theory, the *fully instantiated* type arguments to a dictionary completely determine the runtime evidence
+   for that dictionary. However, we have to make decisions using only partial instantiations.
+
+   Because we assume we can enumerate all the ways that dictionaries can be constructed, we are able to tell
+   when a dictionary that claims to be evidence for (forall a. D[a]) is also suitable for use as evidence for
+   (D[\tau]), since we can tell if there is any way to construct a more specific instance via (forall b. D[T[b]]).
+
+   Of course this assumption fails if a later loaded module adds another specific dictionary construction rule
+   that we couldn't see at the point we committed in the earlier compile.
+ * The only time we can do so if we can make an unambiguous choice between the possible pieces of evidence.
+   This can happen because:
+     1. One piece of evidence is strictly more specific e.g. if we have:
+   		 HAVE forall a. D a
+   		 	  forall a. D [a]
+   		 WANT D [b]
+   	 2. Only one piece of evidence matches e.g. if we have:
+   	     HAVE D Int
+   	     	  D Bool
+   	     WANT D Int
+   	 3. We CANNOT necessarily make an unambiguous choice in a situation like this:
+   		 HAVE forall a. D a
+   		 	  forall a. D [a]
+   		 	  forall a. D [[a]]
+   		 WANT D [b]
+   		Reason: b might be further instantiated, in which case the 3rd instance would match. (Well in this specific case b
+   		is presumably not a touchable, so this is not a problem.)
+   	 If evidence matches skolem variables then this ensures that it will never overlap with a top level instance
+  * DINSTG forces failure when given evidence is an instantiation of a top level instance.
+  * If:
+  	 HAVE forall a. D a
+  	 	  c ~ D Int
+  	 	  c
+  	 WANT D Int
+  	Then it's not clear to me that current GHC actually does the Right Thing (i.e. reports an error), since it may not be
+  	able to see that (D Int) is available via both the top level axiom and the local evidence.
+
+
+
+f :: (forall a. (a ~ Bool) => D (F a)) -> TypeOf b -> b -> ..
+f ty x = case ty of TBool -> .. x ..
+
+1. Touchable = []
+ Given:  forall a. (a ~ Bool) => D (F a)
+ Wanted: exists b. (b ~ Bool) => D (F b)
+2. Touchable = [b, c]
+ Given:	 forall a. (a ~ Bool) => exists d. (D d, F a ~ d)
+ 		 (b ~ Bool)
+ Wanted: D c
+ 	     F b ~ c
+3. Touchable = [b, c]
+ Given:	 forall a. (a ~ Bool) => exists d. (D d, F a ~ d)
+ 		 (b ~ Bool)
+ Wanted: D c
+ 	     F Bool ~ c
+4. Touchable = [b, c] (If evaluating under implication, we could substitute the given info (a ~ Bool)):
+ Given:	 forall a. (a ~ Bool) => exists d. (D d, F Bool ~ d)
+ 		 (b ~ Bool)
+ Wanted: D c
+ 	     F Bool ~ c
+5a. Touchable = [b, c, a] (If we try to use the given implication to solve (D c) since c is touchable so we can instantiate with d):
+ Given:	 forall a. (a ~ Bool) => exists d. (D d, F Bool ~ d)
+ 		 (b ~ Bool)
+ 		 D d
+ 		 F Bool ~ d
+ Wanted: (a ~ Bool)
+ 		 D c
+ 		 (c ~ d)
+ 	     F Bool ~ c
+5b. Touchable = [b, c, a]
+ Given:	 forall a. (a ~ Bool) => exists d. (D d, F Bool ~ d)
+ 		 (b ~ Bool)
+ 		 D d
+ Wanted: (a ~ Bool)
+ 		 (c ~ d)
+ ==> yields final substitution [a |-> Bool, c |-> d] with d forall quantified.
+
+data T :: * -> * where
+  T1 :: Int -> T Bool
+  T2 :: T a
+
+test (T1 n) _ = n > 0
+test T2     r = r
+
+Not most general:
+test :: forall a. T a -> Bool -> Bool
+test :: forall a. T a -> a    -> a
+
+Most general:
+test :: forall a b. ((a ~ Bool) => b ~ Bool) => T a -> b -> b
+
+
+class Foo a b where foo :: a -> b -> Int
+instance Foo Int b
+instance Foo a b => Foo [a] b
+
+g y = let h :: forall c. c -> Int
+	      h x = foo y x
+	  in h True
+
+Not most general:
+g :: [Int] -> Int
+g :: [[Int]] -> Int
+g :: [[[Int]]] -> Int
+...
+
+Most general:
+g :: forall a. (forall c. Foo a c) => a -> Int

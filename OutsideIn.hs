@@ -19,28 +19,6 @@ import Text.PrettyPrint.HughesPJClass hiding (first, int)
 import Prelude hiding (interact)
 
 
-{-
-newtype Unique = Unique { unUnique :: Integer }
-               deriving (Eq, Ord)
-
-data UniqSupply = UniqSupply Unique UniqSupply UniqSupply
-
--- Simple but inefficient
-uniqSupply :: UniqSupply
-uniqSupply = go 0
-  where go i = UniqSupply (Unique i) (go (2 * i)) (go (1 + (2 * i)))
-
-uniqFromSupply :: UniqSupply -> Unique
-uniqFromSupply (UniqSupply u _ _) = u
-
-splitUniqSupply :: UniqSupply -> (UniqSupply, UniqSupply)
-splitUniqSupply (UniqSupply _ l r) = (l, r)
-
-deriveUnique :: Unique -> Unique
-deriveUnique (Unique i) = Unique (i + 1)
--}
-
-
 newtype FreshT m a = FreshT { unFreshT :: [String] -> m ([String], a) }
 
 instance Monad m => Functor (FreshT m) where
@@ -119,23 +97,6 @@ class (Pretty tv, Ord tv) => TyVarLike tv where
 freshs :: TyVarLike tv => [a] -> FreshM [tv]
 freshs = mapM (const fresh)
 
-{-
-instance TyVarLike Unique where
-    derived = deriveUnique
--}
-
-{-
-data TyVar = TV { tyVarName :: String, tyVarUnique :: Int }
-
-instance Eq TyVar where
-    (==) = (==) `on` tyVarUnique
-
-instance Ord TyVar where
-    compare = compare `on` tyVarUnique
-
-instance TyVarLike TyVar where
-    derived tv = TV { tyVarName = tyVarName tv, tyVarUnique = derived (tyVarUnique tv) }
--}
 
 newtype TyVar = TV { unTV :: String }
               deriving (Eq, Ord)
@@ -617,11 +578,3 @@ main = forM_ tests $ \(actual, expected) -> do
   if fmap (fmapFst sort) actual == fmap (fmapFst sort) expected
    then return ()
    else putStrLn $ prettyShow actual ++ "\n /=\n" ++ prettyShow expected
-
-
-{-
-solve :: TyVarLike tv
-      => [TopLevelImplication tv] -> [BaseConstraint tv] -> [tv] -> Implications tv
-      -> Maybe ([BaseConstraint tv], TySubst tv)
-
--}

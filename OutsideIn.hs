@@ -61,6 +61,9 @@ freshString = FreshT $ \(s:ss) -> return (ss, s)
 lift :: (forall a. m a -> m' a) -> FreshT m a -> FreshT m' a
 lift f mx = FreshT $ \s -> f (unFreshT mx s)
 
+liftMaybe :: FreshM a -> FreshT Maybe a
+liftMaybe =  lift (Just . unIdentity)
+
 freshNames :: [String]
 freshNames = [c:name | name <- []:freshNames, c <- ['a'..'z']]
 
@@ -338,7 +341,7 @@ solve :: TyVarLike tv
 solve tlis givens touchables (wanted_impls, wanteds)
   | trace ("solve " ++ prettyShow (tlis, givens, touchables, (wanted_impls, wanteds))) False = undefined
   | otherwise  = do
-    (residuals, theta) <- lift (Just . unIdentity) $ simp tlis givens touchables wanteds
+    (residuals, theta) <- simp tlis givens touchables wanteds
     let givens' = residuals ++ givens
     forM_ wanted_impls $ \(Imp touchables' imp_givens imp_wanteds) -> do
         ([], imp_theta) <- solve tlis (imp_givens ++ givens') touchables' imp_wanteds
@@ -348,7 +351,7 @@ solve tlis givens touchables (wanted_impls, wanteds)
 
 simp :: TyVarLike tv
      => [TopLevelImplication tv] -> [BaseConstraint tv] -> [tv] -> [BaseConstraint tv]
-     -> FreshM ([BaseConstraint tv], TySubst tv)
+     -> FreshT Maybe ([BaseConstraint tv], TySubst tv)
 simp tlis givens touchables wanteds = do
     (residuals, theta) <- simp' tlis givens M.empty touchables wanteds
     let theta_pruned = M.filterWithKey (\tv _ -> tv `elem` touchables) theta -- Restrict the domain to the *original* touchables
@@ -357,7 +360,7 @@ simp tlis givens touchables wanteds = do
 
 simp' :: TyVarLike tv
      => [TopLevelImplication tv] -> [BaseConstraint tv] -> TySubst tv -> [tv] -> [BaseConstraint tv]
-     -> FreshM ([BaseConstraint tv], TySubst tv)
+     -> FreshT Maybe ([BaseConstraint tv], TySubst tv)
 simp' tlis givens0 given_subst0 touchables0 wanteds0
   | trace ("simp' " ++ prettyShow (tlis, givens0, given_subst0, touchables0, wanteds0)) False = undefined
   | otherwise = do
@@ -367,8 +370,8 @@ simp' tlis givens0 given_subst0 touchables0 wanteds0
         (wanteds2, wanteds2_noncanon) = interactMany wanteds1
         (wanteds3, wanteds3_noncanon) = simplifyMany givens2 wanteds2
         
-    (             givens3,  givens3_noncanon)  <- topReactGivenMany  tlis givens2
-    (touchables2, wanteds4, wanteds4_noncanon) <- topReactWantedMany tlis wanteds3
+    (             givens3,  givens3_noncanon)  <-             topReactGivenMany  tlis givens2
+    (touchables2, wanteds4, wanteds4_noncanon) <- liftMaybe $ topReactWantedMany tlis wanteds3
 
     let given_subst      = given_subst0 `M.union` given_subst1
         givens_noncanon  = givens2_noncanon ++ givens3_noncanon
@@ -391,12 +394,12 @@ simp' tlis givens0 given_subst0 touchables0 wanteds0
         -> simp' tlis (givens_noncanon ++ givens3) given_subst touchables (wanteds_noncanon ++ wanteds4)
 
 
-canonicaliseMany :: TyVarLike tv => [BaseConstraint tv] -> FreshM ([tv], TySubst tv, [(BaseConstraint tv)])
+canonicaliseMany :: TyVarLike tv => [BaseConstraint tv] -> FreshT Maybe ([tv], TySubst tv, [(BaseConstraint tv)])
 canonicaliseMany constraints = do
     (touchabless, substs, constraintss) <- fmap unzip3 (mapM canonicalise constraints)
     return (concat touchabless, M.unionsWith (error "canonicaliseMany") substs, concat constraintss)
 
-canonicalise :: TyVarLike tv => BaseConstraint tv -> FreshM ([tv], TySubst tv, [(BaseConstraint tv)])
+canonicalise :: TyVarLike tv => BaseConstraint tv -> FreshT Maybe ([tv], TySubst tv, [(BaseConstraint tv)])
 canonicalise constraint = case canonicalise' constraint of
     Nothing -> return ([], M.empty, [constraint])
     Just it -> do
@@ -404,7 +407,7 @@ canonicalise constraint = case canonicalise' constraint of
       (touchables2, subst2, constraints2) <- canonicaliseMany constraints1
       return (touchables1 ++ touchables2, M.unionWith (error "canonicalise") subst1 subst2, constraints2)
 
-canonicalise' :: TyVarLike tv => BaseConstraint tv -> Maybe (FreshM ([tv], TySubst tv, [(BaseConstraint tv)]))
+canonicalise' :: TyVarLike tv => BaseConstraint tv -> Maybe (FreshT Maybe ([tv], TySubst tv, [(BaseConstraint tv)]))
 canonicalise' c | trace ("canonicalise' " ++ prettyShow c) False = undefined
 canonicalise' (Equality (ty1 :~ ty2))
   -- REFL
@@ -413,9 +416,9 @@ canonicalise' (Equality (ty1 :~ ty2))
   -- TDEC/FAILDEC
   | TyConApp tc1 tys1 <- ty1
   , TyConApp tc2 tys2 <- ty2
-  = if tc1 == tc2
-     then Just $ return ([], M.empty, map Equality $ zipWith (:~) tys1 tys2)
-     else error "FIXME: fail"
+  = Just $ if tc1 == tc2
+            then return ([], M.empty, map Equality $ zipWith (:~) tys1 tys2)
+            else fail "Non-unifiable types"
   -- ORIENT
   | case () of _ | TyFamApp _ _ <- ty2
                  , case ty1 of TyFamApp _ _ -> False; _ -> True
@@ -432,20 +435,20 @@ canonicalise' (Equality (ty1 :~ ty2))
   -- FFLATWL/FFLATGL
   | TyFamApp tf1 tys1 <- ty1
   , Just it <- canonicaliseTypes tys1
-  = Just $ flip fmap it $ \(tys1', (tv_float, ty_float)) -> ([tv_float], M.singleton tv_float ty_float, [Equality (TyFamApp tf1 tys1' :~ ty2), Equality (ty_float :~ TyVar tv_float)])
+  = Just $ flip fmap (liftMaybe it) $ \(tys1', (tv_float, ty_float)) -> ([tv_float], M.singleton tv_float ty_float, [Equality (TyFamApp tf1 tys1' :~ ty2), Equality (ty_float :~ TyVar tv_float)])
   -- FFLATWR/FFLATGR
   | case ty1 of TyFamApp _ _ -> True; TyVar _ -> True; _ -> False
   , Just it <- canonicaliseType ty2
-  = Just $ flip fmap it $ \(ty2', (tv_float, ty_float)) -> ([tv_float], M.singleton tv_float ty_float, [Equality (ty1 :~ ty2'), Equality (ty_float :~ TyVar tv_float)])
+  = Just $ flip fmap (liftMaybe it) $ \(ty2', (tv_float, ty_float)) -> ([tv_float], M.singleton tv_float ty_float, [Equality (ty1 :~ ty2'), Equality (ty_float :~ TyVar tv_float)])
   -- NB: critical to test strict type equality before this since (a ~ a) is OK
   -- NB: critical to float out all nested type families before this since a TV in an TyFam argument is OK
   | TyVar tv1 <- ty1
   , tv1 `S.member` fvs ty2
-  = error "FIXME: fail"
+  = Just $ fail "Occurs check failure"
 canonicalise' (Instance (I cls tys))
   -- DFLATW/DFLATG
   | Just it <- canonicaliseTypes tys
-  = Just $ flip fmap it $ \(tys', (tv, ty)) -> ([tv], M.singleton tv ty, [Instance (I cls tys'), Equality (ty :~ TyVar tv)])
+  = Just $ flip fmap (liftMaybe it) $ \(tys', (tv, ty)) -> ([tv], M.singleton tv ty, [Instance (I cls tys'), Equality (ty :~ TyVar tv)])
 canonicalise' _ = Nothing
 
 canonicaliseType :: TyVarLike tv => Type tv -> Maybe (FreshM (Type tv, (tv, Type tv)))
@@ -526,21 +529,21 @@ unstrength :: Functor m => (a, m b) -> m (a, b)
 unstrength (a, mb) = fmap ((,) a) mb
 
 
-topReactGivenMany :: TyVarLike tv => [TopLevelImplication tv] -> [BaseConstraint tv] -> FreshM ([BaseConstraint tv], [BaseConstraint tv])
+topReactGivenMany :: TyVarLike tv => [TopLevelImplication tv] -> [BaseConstraint tv] -> FreshT Maybe ([BaseConstraint tv], [BaseConstraint tv])
 topReactGivenMany tlis = unstrength . second (fmap concat . sequence) . apply topReactGiven tlis
 
-topReactGiven :: TyVarLike tv => TopLevelImplication tv -> BaseConstraint tv -> Maybe (Maybe (FreshM [BaseConstraint tv]))
+topReactGiven :: TyVarLike tv => TopLevelImplication tv -> BaseConstraint tv -> Maybe (Maybe (FreshT Maybe [BaseConstraint tv]))
 topReactGiven tli c | trace ("topReactGiven " ++ prettyShow (tli, c)) False = undefined
 topReactGiven (TLI _ _ (I cls1 tys1)) (Instance (I cls2 tys2))
   -- DINSTG
   | cls1 == cls2
   , Just _ <- zipWithM antiSubst tys1 tys2 >>= joinSubsts
-  = error "FIXME: fail"
+  = Just $ Just $ fail "Competing given evidence for same dictionary"
 topReactGiven (TLE tvs tf1a tys1a ty1b) (Equality (TyFamApp tf2a tys2b :~ ty2b))
   -- FINST[g]
   | tf1a == tf2a
   , Just it <- instTop tvs tys1a tys2b
-  = Just $ Just $ flip fmap it $ \(_tvs_gamma, theta) -> [Equality (subst theta ty1b :~ ty2b)]
+  = Just $ Just $ flip fmap (liftMaybe it) $ \(_tvs_gamma, theta) -> [Equality (subst theta ty1b :~ ty2b)]
 topReactGiven _ _ = Nothing
 
 
@@ -600,7 +603,13 @@ tests = map (first runFreshT) [
     (solve [TLE [] "F" [int] int, TLE [a] "G" [aTy] bool]
            [Equality (aTy :~ list (TyFamApp "F" [aTy]))] []
            ([], [Equality (TyFamApp "G" [aTy] :~ bool)]),
-     Just ([], M.empty))
+     Just ([], M.empty)),
+    -- p65: avoiding the need for choice
+    (solve [TLI [a]    [Instance (I "P" [aTy])] (I "Q" [list aTy]),
+            TLI [a, b] [Equality (aTy :~ bTy)] (I "R" [list aTy, bTy])]
+           [Instance (I "Q" [list aTy])] [beta]
+           ([], [Instance (I "Q" [list betaTy]), Instance (I "R" [betaTy, list aTy])]),
+     Nothing)
   ]
 
 main :: IO ()

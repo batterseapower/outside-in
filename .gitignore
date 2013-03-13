@@ -3,3 +3,6 @@ Thumbs.db
 
 *.o
 *.hi
+*.aux
+*.log
+*.pdf

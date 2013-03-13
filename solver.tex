@@ -1,0 +1,354 @@
+\documentclass{article}
+
+\usepackage[a4paper, margin=2cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{proof}
+\usepackage{MnSymbol}
+\usepackage[T1]{fontenc} % Let me write the pipe symbol
+
+\newcommand{\hasgrammar}{::=}
+\newcommand{\orprod}{\, | \,}
+\newcommand{\multi}[1]{{\overline{#1}}}
+\newcommand{\bvar}[2]{#1 :: #2}
+\newcommand{\Q}{\mathcal{Q}}
+\newcommand{\To}{\Rightarrow}
+\newcommand{\arrowish}{|\!\!\!\rightarrow}
+\newcommand{\rulen}[1]{\textsc{#1}}
+\newcommand{\angles}[1]{\left\langle #1 \right\rangle}
+\newcommand{\disjointunion}{\uplus}
+\newcommand{\Epsilon}{\mathcal{E}}
+
+\newcommand{\D}{\mathbb{D}} % FIXME
+\newcommand{\T}{\mathbb{T}} % FIXME
+\newcommand{\F}{\mathbb{F}} % FIXME
+
+\begin{document}
+
+\section{Syntax}
+
+% Fig 1 (p12): Syntax
+% + Fig 9 (p24): Syntax extensions that introduce local assumptions
+% + Fig 17: Syntactic extensions for type classes and local families
+\[
+\begin{array}{llcl}
+
+\text{Term variables}    && \in & x, y, z, f, g, h \\
+\text{Type variables}    && \in & a, b, c \\
+\text{Data constructors} && \in & K \\
+
+                         & \nu            & \hasgrammar & K \orprod x \\
+\text{Programs}          & \textit{prog}  & \hasgrammar & \epsilon \orprod f = e, \textit{prog} \orprod \bvar{f}{\sigma} = e, \textit{prog} \\
+\text{Expressions}       & e              & \hasgrammar & \nu \orprod \lambda x. e \orprod e_1 ~ e_2 \orprod \textbf{case} ~ e ~ \textbf{of} \{ \multi{K ~ \multi{x} \to e} \} \\
+                         &                & \orprod     & \textbf{let} ~ \bvar{x}{\sigma} = e_1 ~ \textbf{in} ~ e_2 \\
+                         &                & \orprod     & \textbf{let} ~ x = e_1 ~ \textbf{in} ~ e_2 \\
+\text{Type schemes}      & \sigma         & \hasgrammar & \forall \multi{a}. Q \To \tau \\
+\text{Constraints}       & Q              & \hasgrammar & \epsilon \orprod Q_1 \land Q_2 \orprod \tau_1 \sim \tau_2 \orprod D ~ \multi{\tau} \\
+\text{Monotypes}         & \tau, \upsilon & \hasgrammar & \textit{tv} \orprod \textbf{Int} \orprod \textbf{Bool} \orprod [\tau] \orprod T ~ \multi{\tau} \orprod F ~ \multi{\tau} \\
+                         & \xi            & \in         & \{ \tau ~ | ~ \tau ~ \text{contains no type families} \} \\
+                         & \textit{tv}    & \hasgrammar & a \\
+\text{Type environments} & \Gamma         & \hasgrammar & \epsilon \orprod (\bvar{\nu}{\sigma}),\Gamma \\
+
+\text{Free type variables} & \textit{ftv}(\bullet) \\
+
+\\
+\multicolumn{4}{l}{\Gamma_0 : \text{Types of data constructors}} \\
+\multicolumn{4}{l}{\quad \bvar{K}{\forall \multi{a} \multi{b}. Q \To \multi{\upsilon} \to T ~ \multi{a}}} \\
+
+\\
+\multicolumn{4}{l}{\text{Top-level axiom schemes}} \\
+\multicolumn{4}{l}{\quad \Q \hasgrammar \epsilon \orprod \Q \land \Q \orprod \forall \multi{a}. Q \To D ~ \multi{\xi} \orprod \forall \multi{a}. F ~ \multi{\xi} \sim \tau} \\
+
+\\
+\text{Auxiliary syntactic definitions} & \T & \hasgrammar & T ~ \multi{\T} \orprod \F \orprod \T \to \T \orprod \bullet \\
+                                       & \F & \hasgrammar & F ~ \multi{\T} \\
+                                       & \D & \hasgrammar & D ~ \multi{\T} \\
+
+\end{array}
+\]
+
+
+\section{OutsideIn($X$) solver}
+
+This solver discharges wanted implications by $\eta$-expansion. It cannot discharge given implications, so if we want
+to add those we will have to modify the $X$ solver.
+
+\newcommand{\simple}[1]{\textbf{simple}[#1]}
+\newcommand{\implic}[1]{\textbf{implic}[#1]}
+
+% Fig 5 (p17): Syntax extensions for the algorithm
+% + Fig 11 (p37): Syntax extensions for OutsideIn(X)
+\[
+\begin{array}{llcl}
+
+\text{Unification variables}                   & \alpha, \beta, \gamma, \ldots \\
+\text{Unifiers}                                & \theta, \phi                  & \hasgrammar & [\multi{\alpha \mapsto \tau}] \\
+\text{Unification or rigid (skolem) variables} & \textit{tv}                   & \hasgrammar & \alpha \orprod a \\
+% NB: the Q in (\exists \multi{\alpha}. (Q \supset C)) never contains the \alpha, so it is logically equivalent to move the exists inside the implication
+\text{Algorithm-generated constraints}         & C                             & \hasgrammar & Q \orprod C_1 \land C_2 \orprod \exists \multi{\alpha}. (Q \supset C) \\
+\text{Free unification variables}              & \textit{fuv}(\bullet) \\
+
+\\
+& \simple{Q}                                     & = & Q \\
+& \simple{C_1 \land C_2}                         & = & \simple{C_1} \land \simple{C_2} \\
+& \simple{\exists \multi{\alpha}. (Q \supset C)} & = & \epsilon \\
+
+\\
+& \implic{Q}                                     & = & \epsilon \\
+& \implic{C_1 \land C_2}                         & = & \implic{C_1} \land \implic{C_2} \\
+& \implic{\exists \multi{\alpha}. (Q \supset C)} & = & \exists \multi{\alpha}. (Q \supset C) \\
+
+\end{array}
+\]
+
+% Fig 7: Top-level algorithmic rules
+% \[
+% \begin{array}{c}
+
+% \infer[\rulen{empty}]
+%   {\Q; \Gamma \arrowish \epsilon}
+%   {} \\
+% \infer[\rulen{bind}]
+%   {\Q; \Gamma \arrowish f = e, \textit{prog}}
+%   {\Gamma \arrowish e : \tau } \\
+
+% \end{array}
+% \]
+
+% Fig 14: Solver infrastructure
+\[
+\begin{array}{c}
+\framebox{$\Q; Q_\textit{given}; \multi{\alpha}_\textit{tch} \arrowish^\textit{solv} C_\textit{wanted} \rightsquigarrow Q_\textit{residual}; \theta$} \\
+\\[-3mm]
+
+\infer[\rulen{solve}]
+  {\Q; Q_g; \multi{\alpha} \arrowish^{solv} C \rightsquigarrow Q_r; \theta}
+  {\Q; Q_g; \multi{\alpha} \arrowish^{simp} \simple{C} \rightsquigarrow Q_r; \theta &
+   \forall (\exists \multi{\alpha}_i. (Q_i \supset C_i)) \in \implic{\theta C}. 
+     \Q; Q_g \land Q_r \land Q_i; \multi{\alpha}_i \arrowish^{solv} C_i \rightsquigarrow \epsilon; \theta_i} \\
+\end{array}
+\]
+
+
+\section{Solver for type classes + GADTs + type families}
+
+\newcommand{\canon}[2]{\textit{canon}{[}#1{]}(#2)}
+\newcommand{\interact}[2]{\textit{interact}{[}#1{]}(#2)}
+\newcommand{\topreact}[2]{\textit{topreact}{[}#1{]}(#2)}
+
+% Fig 19 (p55): Main simplifier structure
+\[
+\begin{array}{c}
+
+\framebox{$\Q; Q_\textit{given}; \multi{\alpha}_\textit{tch} \arrowish^\textit{simp} Q_\textit{wanted} \rightsquigarrow Q_\textit{residual}; \theta$} \\
+\\[-3mm]
+
+% As far as I can see, this is the only rule where the difference between unification and rigid variables is really used
+% NB: it doesn't matter that the flattening subst can be applied to the givens: we throw the new givens away!
+\infer[\rulen{simples}]
+  {\Q; Q_g; \multi{\alpha} \arrowish^\textit{simp} Q_w \rightsquigarrow \theta Q_r; \theta |_\multi{\alpha}
+  }
+  {\begin{array}{l}
+   \Q \arrowish \angles{\multi{\alpha}, \epsilon, Q_g, Q_w} \hookrightarrow^* \angles{\multi{\alpha}', \phi, Q_g', Q_w'} \nlhookrightarrow \\
+   \phi Q_w' = \Epsilon \land Q_r \\
+   \Epsilon = \{ \beta \sim \tau | ((\beta \sim \tau) \in \phi Q_w' ~ \text{or} ~ (\tau \sim \beta) \in \phi Q_w'), \beta \in \multi{\alpha}', \beta \notin \textit{fuv}(\tau) \} \\
+   \theta = [\beta \mapsto \theta \tau | (\beta \sim \tau) \in \Epsilon] \\
+   \multi{\beta} ~ \text{distinct}
+   \end{array}
+   } \\
+\\
+
+% Inputs:
+%  \Q             top level rules
+%  \multi{\alpha} touchables
+%  \phi           flattening substitution (undoes flattening performed by canonicalisation)
+%  Q_g            given constraints
+%  Q_w            wanted constraints
+\framebox{$\Q \arrowish \angles{\multi{\alpha}, \phi, Q_g, Q_w} \hookrightarrow \angles{\multi{\alpha}', \phi', Q_g', Q_w'}_\bot$} \\
+\\[-3mm]
+
+% can rules are either given or wanted and replace evidence on either side with a decomposed version
+\infer[\rulen{cang}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi_1, Q_g \land Q_1, Q_w} \hookrightarrow
+                \angles{\multi{\alpha} \multi{\beta}, \phi_1 \disjointunion \phi_2, Q_g \land Q_2, Q_w}_\bot}
+  {\canon{g}{Q_1} = \{ \multi{\beta}, \phi_2, Q_2 \}_\bot
+  }
+\\[1mm]
+\infer[\rulen{canw}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi_1, Q_g, Q_w \land Q_1} \hookrightarrow
+                \angles{\multi{\alpha} \multi{\beta}, \phi_1 \disjointunion \phi_2, Q_g, Q_w \land Q_2}_\bot}
+  {\canon{w}{Q_1} = \{ \multi{\beta}, \phi_2, Q_2 \}_\bot}
+\\[2mm]
+
+% int rules are either given-given or wanted-wanted and replace evidence on either side with an interacted version
+\infer[\rulen{intg}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi, Q_g \land Q_1 \land Q_2, Q_w} \hookrightarrow
+                \angles{\multi{\alpha}, \phi, Q_g \land Q_3, Q_w}_\bot}
+  {\interact{g}{Q_1, Q_2} = Q_3}
+\\[1mm]
+\infer[\rulen{intw}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi, Q_g, Q_w \land Q_1 \land Q_2} \hookrightarrow
+                \angles{\multi{\alpha}, \phi, Q_g, Q_w \land Q_3}_\bot}
+  {\interact{w}{Q_1, Q_2} = Q_3}
+\\[2mm]
+
+% the simpl rule is the sole source of wanted-given interaction and replaces evidence in the wanted ONLY
+\infer[\rulen{simpl}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi, Q_g \land Q, Q_w \land Q_1} \hookrightarrow
+                \angles{\multi{\alpha}, \phi, Q_g \land Q, Q_w \land Q_2}_\bot}
+  {(Q) ~ \textit{simplifies} ~ (Q_1) = Q_2}
+\\[2mm]
+
+% the topreact rules are either given or wanted and replace evidence on either side with a simplifed version
+% an interesting difference is that we may introduce new touchables in topw but not topg
+\infer[\rulen{topg}]
+  {\Q \arrowish \angles{\multi{\alpha}, \phi, Q_g \land Q_1, Q_w} \hookrightarrow
+                \angles{\multi{\alpha}, \phi, Q_g \land Q_2, Q_w}_\bot}
+  {\topreact{g}{\Q, Q_1} = \{ \epsilon, Q_2 \}_\bot}
+\\[1mm]
+\infer[\rulen{topw}]
+  {\Q \arrowish \angles{\multi{\alpha},               \phi, Q_g, Q_w \land Q_1} \hookrightarrow
+                \angles{\multi{\alpha} \multi{\beta}, \phi, Q_g, Q_w \land Q_2}_\bot}
+  {\topreact{w}{\Q, Q_1} = \{ \multi{\beta}, Q_2 \}_\bot}
+
+\end{array}
+\]
+
+% Fig 20 (p58): auxiliary definitions for canonicalization
+\[
+\begin{array}{c}
+
+\framebox{$\vdash_\textit{can} Q$} \\
+\\[-3mm]
+
+\begin{array}{ccc}
+\infer[\rulen{ceq}]
+  {\vdash_\textit{can} \textit{tv} \sim \xi}
+  {\textit{tv} \prec \xi & \textit{tv} \notin \textit{ftv}(\xi)}
+  % NB: surely the \prec premise is always true?? Weird...
+&
+\infer[\rulen{cfeq}]
+  {\vdash_\textit{can} F ~ \multi{\xi} \sim \xi}
+  {}
+&
+\infer[\rulen{cdict}]
+  {\vdash_\textit{can} D ~ \multi{\xi}}
+  {}
+\end{array}\\
+\\
+
+\framebox{$\tau_1 \prec \tau_2$} \\
+\\[-3mm]
+
+\begin{array}{rcll}
+F ~ \multi{\xi} & \prec & \tau          & \text{when} ~ \tau \neq G ~ \multi{\upsilon} \\
+% This is just so that the shape of constraints looks more like a substitution, and does not have any deep consequences:
+\alpha          & \prec & b \\
+\textit{tv}_1   & \prec & \textit{tv}_2 & \text{when} ~ \textit{tv}_1 \leq \textit{tv}_2 ~ \text{lexicographically} \\
+\textit{tv}     & \prec & \xi \\
+\end{array}
+\end{array}
+\]
+
+% Fig 21 (p59): canonicalization rules
+\[
+\begin{array}{llcl}
+\multicolumn{4}{c}{\framebox{$\canon{l}{Q_1} = \{ \multi{\beta}, \phi, Q_2 \}_\bot$}} \\
+\\[-3mm]
+
+\rulen{refl}     & \canon{l}{\tau               \sim \tau}               & = & \{ \epsilon, \epsilon, \epsilon \} \\
+\rulen{tdec}     & \canon{l}{T ~ \multi{\tau}_1 \sim T ~ \multi{\tau}_2} & = & \{ \epsilon, \epsilon, \land\multi{\tau_1 \sim \tau_2} \} \\
+\rulen{faildec}  & \canon{l}{T ~ \multi{\tau}_1 \sim S ~ \multi{\tau}_2} & = & \bot \\
+\rulen{occcheck} & \canon{l}{\textit{tv} \sim \xi}                       & = & \bot \\
+                 & \text{where} ~ \textit{tv} \in \xi, \xi \neq \textit{tv} \\
+\rulen{orient}   & \canon{l}{\tau_1 \sim \tau_2}                         & = & \{ \epsilon, \epsilon, \tau_2 \sim \tau_1 \} \\
+                 & \text{where} ~ \tau_2 \prec \tau_1 \\
+\rulen{dflatw}   & \canon{w}{\D[G ~ \multi{\xi}]}                      & = & \{ \beta, \epsilon, \D[\beta] \land (G ~ \multi{\xi} \sim \beta) \} \\
+\rulen{dflatg}   & \canon{g}{\D[G ~ \multi{\xi}]}                      & = & \{ \epsilon, [\beta \mapsto G ~ \multi{\xi}], \D[\beta] \land (G ~ \multi{\xi} \sim \beta) \} \\
+\rulen{fflatwl}  & \canon{w}{\F[G ~ \multi{\xi}] \sim \tau}               & = & \{ \beta, \epsilon, (\F[\beta] \sim \tau) \land (G ~ \multi{\xi} \sim \beta) \} \\
+\rulen{fflatwr}  & \canon{w}{\tau \sim \T[G ~ \multi{\xi}]}              & = & \{ \beta, \epsilon, (\tau \sim \T[\beta]) \land (G ~ \multi{\xi} \sim \beta) \} \\
+                 % NB: this side condition is required to prevent overlap with the tdec/faildec rules. With ConstraintKinds it would need to consider \D as well as \T
+                 & \text{where} ~ (\tau = F ~ \multi{\xi} ~ \text{or} ~ \tau = \textit{tv}), \beta ~ \text{fresh} \\
+\rulen{fflatgl}  & \canon{g}{\F[G ~ \multi{\xi}] \sim \tau}              & = & \{ \epsilon, [\beta \mapsto G ~ \multi{\xi}], (\F[\beta] \sim \tau) \land (G ~ \multi{\xi} \sim \beta) \} \\
+\rulen{fflatgr}  & \canon{g}{\tau \sim \T[G ~ \multi{\xi}]}              & = & \{ \epsilon, [\beta \mapsto G ~ \multi{\xi}], (\tau \sim \T[\beta]) \land (G ~ \multi{\xi} \sim \beta) \} \\
+                 & \text{where} ~ (\tau = F ~ \multi{\xi} ~ \text{or} ~ \tau = \textit{tv}), \beta ~ \text{fresh}
+
+\end{array}
+\]
+
+% Fig 22 (p62): binary interaction rules
+\[
+\begin{array}{llcl}
+\multicolumn{4}{c}{\framebox{$\interact{l}{Q_1, Q_2} = Q$}} \\
+\\[-3mm]
+
+\rulen{eqsame} & \interact{l}{\textit{tv} \sim \xi_1, \textit{tv} \sim \xi_2}     & = & (\textit{tv} \sim \xi_1) \land (\xi_1 \sim \xi_2) \\
+               & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_1, \vdash_\textit{can} \textit{tv} \sim \xi_2 \\
+\rulen{eqdiff} & \interact{l}{\textit{tv}_1 \sim \xi_1, \textit{tv}_2 \sim \xi_2} & = & (\textit{tv}_1 \sim \xi_1) \land (\textit{tv}_2 \sim [\textit{tv}_1 \mapsto \xi_1] \xi_2) \\
+               & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_i, \textit{tv}_1 \in \textit{ftv}(\xi_2) \\
+\rulen{eqfeq}  & \interact{l}{\textit{tv} \sim \xi_1, F ~ \multi{\xi} \sim \xi}   & = & (\textit{tv} \sim \xi_1) \land (F ~ [\textit{tv} \mapsto \xi_1]\multi{\xi} \sim [\textit{tv} \mapsto \xi_1]\xi) \\
+               & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_1, \textit{tv} \in \textit{ftv}(\multi{\xi}, \xi) \\
+\rulen{eqdict} & \interact{l}{\textit{tv} \sim \xi_1, D ~ \multi{\xi}}            & = & (\textit{tv} \sim \xi_1) \land (D ~ [\textit{tv} \mapsto \xi_1]\multi{\xi}) \\
+               & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_1, \textit{tv} \in \textit{ftv}(\multi{\xi}) \\
+\rulen{feqfeq} & \interact{l}{F ~ \multi{\xi} \sim \xi_1, F ~ \multi{\xi} \sim \xi_2}        & = & (F ~ \multi{\xi} \sim \xi_1) \land (\xi_1 \sim \xi_2) \\
+\rulen{ddict}  & \interact{l}{D ~ \multi{\xi}, D ~ \multi{\xi}}                   & = & D ~ \multi{\xi} \\
+\end{array}
+\]
+
+% Fig 23 (p64): simplification rules
+% NB: these are essentially just the binary interaction rules except that they output less constraints
+% because they don't need to preserve the given constraint (this is done by the caller)
+\[
+\begin{array}{llcl}
+\multicolumn{4}{c}{\framebox{$Q_1 ~ \textit{simplifies} ~ Q_2 = Q$}} \\
+\\[-3mm]
+
+\rulen{seqsame} & (\textit{tv} \sim \xi_1) ~ \textit{simplifies} ~ (\textit{tv} \sim \xi_2) & = & \xi_1 \sim \xi_2 \\
+                & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_i \\
+\rulen{seqdiff} & (\textit{tv}_1 \sim \xi_1) ~ \textit{simplifies} ~ (\textit{tv}_2 \sim \xi_2) & = & \textit{tv}_2 \sim [\textit{tv}_1 \mapsto \xi_1] \xi_2 \\
+                & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_i, \textit{tv}_1 \in \textit{ftv}(\xi_2) \\
+\rulen{seqfeq}  & (\textit{tv} \sim \xi_1) ~ \textit{simplifies} ~ (F ~ \multi{\xi} \sim \xi)   & = & F ~ [\textit{tv} \mapsto \xi_1]\multi{\xi} \sim \xi \\
+                & \text{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi_1, \textit{tv} \in \textit{ftv}(\multi{\xi}) \\
+\rulen{seqdict} & (\textit{tv} \sim \xi) ~ \textit{simplifies} ~ (D ~ \multi{\xi})           & = & D ~ [\textit{tv} \mapsto \xi]\multi{\xi} \\
+                & \textit{where} ~ \vdash_\textit{can} \textit{tv} \sim \xi, \textit{tv} \in \textit{ftv}(\multi{\xi}) \\
+\rulen{sfeqfeq} & (F ~ \multi{\xi} \sim \xi_1) ~ \textit{simplifies} ~ (F ~ \multi{\xi} \sim \xi_2) & = & \xi_1 \sim \xi_2 \\
+\rulen{sddictg} & (D ~ \multi{\xi}) ~ \textit{simplifies} ~ (D ~ \multi{\xi})               & = & \epsilon \\
+\end{array}
+\]
+
+% Fig 24 (p65): top-level reaction rules
+\[
+\begin{array}{c}
+\framebox{$\topreact{l}{\Q, Q_1} = \{ \multi{\beta}, Q \}_\bot$} \\
+\\[-3mm]
+
+\infer[\rulen{dinstw}]
+  {\topreact{w}{\Q, D ~ \multi{\xi}} = \{ \multi{\gamma}, \theta Q \}}
+  {\forall \multi{a}. Q \To D ~ \multi{\xi}_0 \in \Q &
+   \multi{b} = \textit{ftv}(\multi{\xi}_0) &
+   \multi{c} = \multi{a} - \multi{b} &
+   \multi{\gamma} ~ \text{fresh} &
+   \theta = [\multi{b \mapsto \xi_b}, \multi{c \mapsto \gamma}] &
+   \theta \multi{\xi}_0 = \multi{\xi}}
+\\[1mm]
+\infer[\rulen{dinstg}]
+  {\topreact{g}{\Q, D ~ \multi{\xi}} = \bot}
+  {\forall \multi{a}. Q \To D ~ \multi{\xi}_0 \in \Q &
+   \theta = [\multi{a \mapsto \xi_a}] &
+   \theta \multi{\xi}_0 = \multi{\xi}}
+\\[1mm]
+\infer[\rulen{finst}]
+  {\topreact{l}{\Q, F ~ \multi{\xi} \sim \xi} = \{ \multi{\delta}, \theta \xi_0 \sim \xi \}}
+  {\forall \multi{a}. F ~ \multi{\xi}_0 \sim \xi_0 \in \Q &
+   \multi{b} = \textit{ftv}(\multi{\xi}_0) &
+   \multi{c} = \multi{a} - \multi{b} &
+   \multi{\gamma} ~ \text{fresh} &
+   \theta = [\multi{b \mapsto \tau_a}, \multi{c \mapsto \gamma}] &
+   \theta \multi{\xi}_0 = \multi{\xi} &
+   \text{if} ~ (l = w) ~ \text{then} ~ \multi{\delta} = \multi{\gamma} ~ \text{else} ~ \multi{\delta} = \epsilon}
+\end{array}
+\]
+
+NB: givens never contain touchable variables.
+
+\end{document}

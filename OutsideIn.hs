@@ -14,7 +14,7 @@ import Data.List
 import Debug.Trace
 import GHC.Exts (IsString(..))
 
-import Text.PrettyPrint.HughesPJClass hiding (first)
+import Text.PrettyPrint.HughesPJClass hiding (first, int)
 
 import Prelude hiding (interact)
 
@@ -53,6 +53,7 @@ instance Monad m => Applicative (FreshT m) where
 instance Monad m => Monad (FreshT m) where
     return x = FreshT $ \s -> return (s, x)
     mx >>= xmy = FreshT $ \s -> unFreshT mx s >>= \(s, x) -> unFreshT (xmy x) s
+    fail msg = FreshT $ \_ -> fail msg
 
 freshString :: Monad m => FreshT m String
 freshString = FreshT $ \(s:ss) -> return (ss, s)
@@ -60,9 +61,11 @@ freshString = FreshT $ \(s:ss) -> return (ss, s)
 lift :: (forall a. m a -> m' a) -> FreshT m a -> FreshT m' a
 lift f mx = FreshT $ \s -> f (unFreshT mx s)
 
+freshNames :: [String]
+freshNames = [c:name | name <- []:freshNames, c <- ['a'..'z']]
+
 runFreshT :: Functor m => FreshT m a -> m a
-runFreshT mx = fmap snd $ unFreshT mx $ map ('_':) $ tail names
-  where names = [] ++ [c:name | name <- names, c <- ['a'..'z']]
+runFreshT mx = fmap snd $ unFreshT mx $ map ('_':) $ freshNames
 
 
 newtype Identity a = Identity { unIdentity :: a }
@@ -155,7 +158,7 @@ data TcTyVar = TcUnif   TyVar
 instance TyVarLike TcTyVar where
     derived (TcUnif   tv) = TcUnif   (derived tv)
     derived (TcSkolem tv) = TcSkolem (derived tv)
-    fresh = error "FIXME: which sort?"
+    fresh = fmap TcUnif fresh
 
 instance Pretty TcTyVar where
     pPrintPrec lvl prec (TcUnif tv)   = pPrintPrec lvl prec tv <> char '?'
@@ -421,10 +424,11 @@ canonicalise' (Equality (ty1 :~ ty2))
                  , TyVar tv1 <- ty1
                  -> tv2 < tv1
                  | TyVar _ <- ty2
+                 , case ty1 of TyFamApp _ _ -> False; _ -> True
                  -> True  -- NB: ty1 certainly isn't a tyvar since we already tried that case
                  | otherwise
                  -> False
-  = Just $ return  ([], M.empty, [Equality (ty2 :~ ty1)])
+  = Just $ return ([], M.empty, [Equality (ty2 :~ ty1)])
   -- FFLATWL/FFLATGL
   | TyFamApp tf1 tys1 <- ty1
   , Just it <- canonicaliseTypes tys1
@@ -445,6 +449,7 @@ canonicalise' (Instance (I cls tys))
 canonicalise' _ = Nothing
 
 canonicaliseType :: TyVarLike tv => Type tv -> Maybe (FreshM (Type tv, (tv, Type tv)))
+canonicaliseType ty | trace ("canonicaliseType " ++ prettyShow ty) False = undefined
 canonicaliseType (TyVar _)         = Nothing
 canonicaliseType (TyConApp tc tys) = fmap (liftM (first (TyConApp tc))) $ canonicaliseTypes tys
 canonicaliseType ty@(TyFamApp _ _) = Just $ flip fmap fresh $ \a -> (TyVar a, (a, ty))
@@ -454,21 +459,21 @@ canonicaliseTypes :: TyVarLike tv => [Type tv] -> Maybe (FreshM ([Type tv], (tv,
 canonicaliseTypes []       = Nothing
 canonicaliseTypes (ty:tys) = case canonicaliseType ty of
     Nothing -> fmap (liftM (first (ty:))) $ canonicaliseTypes tys
-    Just it -> Just $ flip fmap it $ \(ty', float) -> (ty':tys, float)
+    Just it -> Just (liftM (first (:tys)) it)
 
 
 interactMany :: TyVarLike tv => [BaseConstraint tv] -> ([BaseConstraint tv] {- normalised inerts -}, [BaseConstraint tv] {- unnormalised -})
 interactMany = go []
-  where go inerts []     = (inerts, [])
-        go inerts (c:cs) = case interactMany' inerts c of
-            Nothing    -> go (c:inerts) cs -- Didn't interact so inert by definition, and normalised since it was before
-            Just mb_c' -> second (maybe id (:) mb_c') $ go inerts cs
+  where 
+    go inerts []     = (inerts, [])
+    go inerts (c:cs) = case interactMany' cs c of
+                         Nothing    -> case interactMany' inerts c of
+                                         Nothing    -> go (c:inerts) cs
+                                         Just mb_c' -> second (maybe id (:) mb_c') $ go inerts cs
+                         Just mb_c' -> second (maybe id (:) mb_c') $ go inerts cs
 
-interactMany' :: TyVarLike tv => [BaseConstraint tv] -> BaseConstraint tv -> Maybe (Maybe (BaseConstraint tv))
-interactMany' []             _  = Nothing
-interactMany' (inert:inerts) c' = case interact inert c' `mplus` interact c' inert of -- FIXME: this is an updated version of c1, not of c2!!! c2 equality is being thrown away, c1 is being recorded in both substituted and non substituted versions
-    Nothing    -> interactMany' inerts c'
-    Just mb_c' -> Just mb_c'
+    interactMany' :: TyVarLike tv => [BaseConstraint tv] -> BaseConstraint tv -> Maybe (Maybe (BaseConstraint tv))
+    interactMany' inerts c = foldr (\inert rest -> interact inert c `mplus` rest) Nothing inerts
 
 -- When reading this, bear in mind that after canonicalization, the LHS of an equality is always a TyVar or TyFamApp
 interact :: TyVarLike tv => BaseConstraint tv -> BaseConstraint tv -> Maybe (Maybe (BaseConstraint tv))
@@ -514,10 +519,7 @@ apply rule = many
 
         -- NB: very similar to interactMany'
         many' :: [a] -> b -> Maybe (Maybe c)
-        many' []             wanted = Nothing
-        many' (given:givens) wanted = case rule given wanted of
-            Nothing    -> many' givens wanted
-            Just mb_c' -> Just mb_c'
+        many' givens wanted = foldr (\given rest -> rule given wanted `mplus` rest) Nothing givens
 
 
 unstrength :: Functor m => (a, m b) -> m (a, b)
@@ -528,6 +530,7 @@ topReactGivenMany :: TyVarLike tv => [TopLevelImplication tv] -> [BaseConstraint
 topReactGivenMany tlis = unstrength . second (fmap concat . sequence) . apply topReactGiven tlis
 
 topReactGiven :: TyVarLike tv => TopLevelImplication tv -> BaseConstraint tv -> Maybe (Maybe (FreshM [BaseConstraint tv]))
+topReactGiven tli c | trace ("topReactGiven " ++ prettyShow (tli, c)) False = undefined
 topReactGiven (TLI _ _ (I cls1 tys1)) (Instance (I cls2 tys2))
   -- DINSTG
   | cls1 == cls2
@@ -546,7 +549,7 @@ topReactWantedMany tlis wanteds = flip fmap (unstrength $ second (fmap ((concat 
                                          $ \(wanteds', (touchables', wanteds_denorm')) -> (touchables', wanteds', wanteds_denorm')
 
 topReactWanted :: TyVarLike tv => TopLevelImplication tv -> BaseConstraint tv -> Maybe (Maybe (FreshM ([tv], [BaseConstraint tv])))
-topReactWanted tli c | trace ("topReactWanted " ++ prettyShow (tli ,c)) False = undefined
+topReactWanted tli c | trace ("topReactWanted " ++ prettyShow (tli, c)) False = undefined
 topReactWanted (TLI tvs required (I cls1 tys1)) (Instance (I cls2 tys2))
   -- DINSTW
   | cls1 == cls2
@@ -575,16 +578,29 @@ b = TcSkolem "b"; bTy = TyVar b
 alpha = TcUnif "alpha"; alphaTy = TyVar alpha
 beta  = TcUnif "beta";  betaTy  = TyVar beta
 
+bool = TyConApp "Bool" []
+int = TyConApp "Int" []
 list ty = TyConApp "[]" [ty]
 eq ty = I "Eq" [ty]
 
 
-tests = [
-    -- p19
-    (runFreshT $ solve [TLI [a] [Instance (eq aTy)] (eq (list aTy))]
-                       [] [alpha, beta]
-                       ([], [Instance (eq alphaTy), Equality (list betaTy :~ alphaTy)]),
-     Just ([Instance (eq betaTy)], M.singleton alpha (list betaTy)))
+tests :: [(Maybe ([BaseConstraint TcTyVar], TySubst TcTyVar),
+           Maybe ([BaseConstraint TcTyVar], TySubst TcTyVar))]
+tests = map (first runFreshT) [
+    -- p19: simple use of instance declarations
+    (solve [TLI [a] [Instance (eq aTy)] (eq (list aTy))]
+           [] [alpha, beta]
+           ([], [Instance (eq alphaTy), Equality (list betaTy :~ alphaTy)]),
+     Just ([Instance (eq betaTy)], M.singleton alpha (list betaTy))),
+    -- p43: program that has a principal type but is unsolvable
+    (solve [] [] [alpha, beta]
+           ([Imp [] [Equality (alphaTy :~ bool)] ([], [Equality (betaTy :~ int)])], [Equality (alphaTy :~ bool)]),
+     Nothing),
+    -- p54: infinite substitution danger
+    (solve [TLE [] "F" [int] int, TLE [a] "G" [aTy] bool]
+           [Equality (aTy :~ list (TyFamApp "F" [aTy]))] []
+           ([], [Equality (TyFamApp "G" [aTy] :~ bool)]),
+     Just ([], M.empty))
   ]
 
 main :: IO ()
